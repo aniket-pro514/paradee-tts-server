@@ -3,7 +3,4 @@ uvicorn[standard]==0.30.6
 soundfile==0.12.1
 numpy>=1.26.0
 onnxruntime>=1.18.0
-misaki[en,hi]
-espeakng-loader
-phonemizer-fork
 git+https://github.com/sahilmahendrakar/paradee.git

@@ -1,12 +1,17 @@
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+
 import io
 import inspect
+import threading
 import numpy as np
 import soundfile as sf
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
-app = FastAPI(title="Scribble Paradee 1.3 Neural TTS Server")
+app = FastAPI(title="Scribble Paradee 1.3 TTS Server")
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,6 +31,7 @@ VALID_VOICES = {
 
 tts_engine = None
 paradee_module = None
+inference_lock = threading.Lock()
 
 @app.on_event("startup")
 def load_paradee_engine():
@@ -36,7 +42,7 @@ def load_paradee_engine():
         tts_engine = paradee.Paradee()
     elif hasattr(paradee, "TTS"):
         tts_engine = paradee.TTS()
-    print("Paradee 1.3 Engine loaded into RAM!")
+    print("✅ Paradee 1.3 Engine loaded into RAM!")
 
 def run_paradee_inference(text: str, voice: str, speed: float):
     target = tts_engine if tts_engine is not None else paradee_module
@@ -50,9 +56,19 @@ def run_paradee_inference(text: str, voice: str, speed: float):
                 kwargs["voice"] = voice
             if "speed" in sig.parameters:
                 kwargs["speed"] = speed
-            if "lang" in sig.parameters and voice.startswith("h"):
-                kwargs["lang"] = "hi"
-            return fn(text, **kwargs)
+            if "lang" in sig.parameters:
+                if voice.startswith("h"):
+                    kwargs["lang"] = "hi"
+                elif voice.startswith("b"):
+                    kwargs["lang"] = "en-gb"
+                else:
+                    kwargs["lang"] = "en-us"
+
+            try:
+                return fn(text, **kwargs)
+            except Exception:
+                # Fallback with only voice parameter if lang/speed rejected
+                return fn(text, voice=voice)
 
     raise RuntimeError("Could not find synthesis method on paradee module.")
 
@@ -62,7 +78,6 @@ def health_check():
         "status": "online",
         "model": "Paradee 1.3 (8.5MB INT8 ONNX)",
         "voices": list(VALID_VOICES),
-        "license": "Apache-2.0",
     }
 
 @app.get("/tts")
@@ -79,7 +94,8 @@ def synthesize_speech(
     chosen_voice = voice if voice in VALID_VOICES else "hf_alpha"
 
     try:
-        result = run_paradee_inference(clean_text, chosen_voice, speed)
+        with inference_lock:
+            result = run_paradee_inference(clean_text, chosen_voice, speed)
 
         sample_rate = 24000
         if isinstance(result, tuple):
